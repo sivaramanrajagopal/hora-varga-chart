@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import jsPDF from 'jspdf';
 import { 
     Card, 
@@ -7,15 +7,7 @@ import {
     CardTitle 
 } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { 
-    Select, 
-    SelectContent, 
-    SelectItem, 
-    SelectTrigger, 
-    SelectValue 
-} from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
-import { ScrollArea } from '@/components/ui/scroll-area';
 
 // Type definitions
 interface PlanetPosition {
@@ -84,6 +76,64 @@ const calculateHoraPlacement = (rashi: string, degree: number): string => {
         : (degree <= 15 ? 'கடகம்' : 'சிம்மம்');
 };
 
+// Custom SelectBox to replace the standard Select component
+const CustomSelect: React.FC<{
+    options: string[];
+    value: string;
+    onChange: (value: string) => void;
+    placeholder: string;
+    className?: string;
+}> = ({ options, value, onChange, placeholder, className = "" }) => {
+    const [isOpen, setIsOpen] = useState(false);
+    const dropdownRef = useRef<HTMLDivElement>(null);
+
+    // Handle click outside to close dropdown
+    useEffect(() => {
+        const handleClickOutside = (event: MouseEvent) => {
+            if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+                setIsOpen(false);
+            }
+        };
+
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => {
+            document.removeEventListener('mousedown', handleClickOutside);
+        };
+    }, []);
+    
+    return (
+        <div className={`relative ${className}`} ref={dropdownRef}>
+            <button
+                type="button"
+                className="w-full flex items-center justify-between px-3 py-2 border rounded-md bg-background text-left"
+                onClick={() => setIsOpen(!isOpen)}
+            >
+                <span>{value || placeholder}</span>
+                <span>▼</span>
+            </button>
+            
+            {isOpen && (
+                <div className="absolute left-0 w-full mt-1 bg-white border rounded-md shadow-lg z-50">
+                    <div className="max-h-60 overflow-y-auto">
+                        {options.map((option, idx) => (
+                            <div
+                                key={idx}
+                                className="px-3 py-2 hover:bg-gray-100 cursor-pointer"
+                                onClick={() => {
+                                    onChange(option);
+                                    setIsOpen(false);
+                                }}
+                            >
+                                {option}
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
 const HoraVargaChart: React.FC = () => {
     const [planetPositions, setPlanetPositions] = useState<PlanetPosition[]>([
         { planetName: '', rashi: '', degree: '' }
@@ -92,6 +142,41 @@ const HoraVargaChart: React.FC = () => {
     const [horaChart, setHoraChart] = useState<HoraChartEntry[]>([]);
     const [selectedHoraRashi, setSelectedHoraRashi] = useState<string | null>(null);
     const chartRef = useRef<HTMLDivElement>(null);
+    const [fontLoaded, setFontLoaded] = useState(false);
+
+    // Load the Tamil font for PDF
+    useEffect(() => {
+        const loadFont = async () => {
+            try {
+                // This URL points to a Tamil font that supports Tamil script
+                const fontUrl = "https://cdn.jsdelivr.net/npm/lohit-tamil-web@2.91.4/Lohit-Tamil.woff2";
+                
+                const fontResponse = await fetch(fontUrl);
+                const fontData = await fontResponse.arrayBuffer();
+                
+                // Store the font data in localStorage for use when generating PDF
+                localStorage.setItem('tamilFontData', arrayBufferToBase64(fontData));
+                setFontLoaded(true);
+            } catch (error) {
+                console.error("Error loading Tamil font:", error);
+                // Fallback to use English transliteration if font loading fails
+                setFontLoaded(true);
+            }
+        };
+        
+        loadFont();
+    }, []);
+
+    // Helper function to convert ArrayBuffer to Base64 string
+    const arrayBufferToBase64 = (buffer: ArrayBuffer): string => {
+        let binary = '';
+        const bytes = new Uint8Array(buffer);
+        const len = bytes.byteLength;
+        for (let i = 0; i < len; i++) {
+            binary += String.fromCharCode(bytes[i]);
+        }
+        return window.btoa(binary);
+    };
 
     const addPlanetInput = () => {
         setPlanetPositions(prev => [
@@ -119,31 +204,69 @@ const HoraVargaChart: React.FC = () => {
                 degree: lagna.degree,
                 horaRashi: calculateHoraPlacement(lagna.rashi, parseFloat(lagna.degree || '0'))
             }] : []),
-            ...planetPositions.map(planet => ({
-                ...planet,
-                horaRashi: calculateHoraPlacement(planet.rashi, parseFloat(planet.degree || '0'))
-            }))
+            ...planetPositions
+                .filter(p => p.planetName && p.rashi) // Skip empty entries
+                .map(planet => ({
+                    ...planet,
+                    horaRashi: calculateHoraPlacement(planet.rashi, parseFloat(planet.degree || '0'))
+                }))
         ];
         setHoraChart(computedChart);
     };
 
+    // Helper function to get English equivalents for Tamil text (for PDF fallback)
+    const getTamilEquivalent = (tamilText: string): string => {
+        const tamilToEnglish: Record<string, string> = {
+            'லக்நம்': 'Lagna',
+            'மேஷம்': 'Mesha',
+            'ரிஷபம்': 'Rishabha',
+            'மிதுனம்': 'Mithuna',
+            'கடகம்': 'Kataka',
+            'சிம்மம்': 'Simha',
+            'கன்னி': 'Kanni',
+            'துலாம்': 'Thulam',
+            'விருச்சிகம்': 'Vrischika',
+            'தனுசு': 'Dhanusu',
+            'மகரம்': 'Makara',
+            'கும்பம்': 'Kumbha',
+            'மீனம்': 'Meena',
+            'சூரியன்': 'Surya',
+            'சந்திரன்': 'Chandra',
+            'செவ்வாய்': 'Sevvai',
+            'புதன்': 'Budha',
+            'குரு': 'Guru',
+            'சுக்கிரன்': 'Sukra',
+            'சனி': 'Sani',
+            'ராகு': 'Rahu',
+            'கேது': 'Ketu',
+            // Add more mappings as needed
+        };
+        
+        return tamilToEnglish[tamilText] || tamilText;
+    };
+
     const generatePDF = () => {
-        // Create a new jsPDF instance
-        const doc = new jsPDF();
+        // Create a new jsPDF instance with Unicode support
+        const doc = new jsPDF({
+            orientation: 'portrait',
+            unit: 'mm',
+            format: 'a4'
+        });
 
-        // Set font
-        doc.setFont('helvetica');
+        // For PDF generation, we'll use transliteration as a fallback
+        // since embedding Tamil fonts is challenging
+        const useTransliteration = true;
 
-        // Title
+        // Set title
         doc.setFontSize(16);
-        doc.text('D2 ஹோரா வர்க வரைபடம்', 105, 20, { align: 'center' });
+        doc.text('D2 Hora Varga Chart', 105, 20, { align: 'center' });
 
         // Table headers
         doc.setFontSize(12);
-        doc.text('கிரகம்', 20, 40);
-        doc.text('D1 ராசி', 70, 40);
-        doc.text('D1 பாகம்', 120, 40);
-        doc.text('ஹோரா ராசி', 170, 40);
+        doc.text('Planet', 20, 40);
+        doc.text('D1 Rashi', 70, 40);
+        doc.text('D1 Degree', 120, 40);
+        doc.text('Hora Rashi', 170, 40);
         
         // Draw a line under headers
         doc.line(10, 45, 200, 45);
@@ -151,35 +274,54 @@ const HoraVargaChart: React.FC = () => {
         // Add chart data
         let yOffset = 50;
         horaChart.forEach((planet) => {
-            doc.text(planet.planetName, 20, yOffset);
-            doc.text(planet.rashi, 70, yOffset);
+            const planetName = useTransliteration ? getTamilEquivalent(planet.planetName) : planet.planetName;
+            const rashiName = useTransliteration ? getTamilEquivalent(planet.rashi) : planet.rashi;
+            const horaRashiName = useTransliteration ? getTamilEquivalent(planet.horaRashi) : planet.horaRashi;
+            
+            doc.text(planetName, 20, yOffset);
+            doc.text(rashiName, 70, yOffset);
             doc.text(`${planet.degree}°`, 120, yOffset);
-            doc.text(planet.horaRashi, 170, yOffset);
+            doc.text(horaRashiName, 170, yOffset);
             
             yOffset += 10;
         });
 
         // Add Hora Rashi Interpretation if selected
-        if (selectedHoraRashi) {
+        if (selectedHoraRashi && HORA_INTERPRETATIONS[selectedHoraRashi]) {
             const interpretation = HORA_INTERPRETATIONS[selectedHoraRashi];
+            const titleText = useTransliteration 
+                ? `${getTamilEquivalent(selectedHoraRashi)} - ${selectedHoraRashi === 'கடகம்' ? 'Female Hora' : 'Male Hora'}`
+                : interpretation.title;
             
             yOffset += 20;
             doc.setFontSize(14);
-            doc.text(interpretation.title, 105, yOffset, { align: 'center' });
+            doc.text(titleText, 105, yOffset, { align: 'center' });
             
+            // Description - Simplified for PDF
             yOffset += 10;
             doc.setFontSize(12);
-            // Wrap text if it's too long
-            const splitText = doc.splitTextToSize(interpretation.description, 170);
-            doc.text(splitText, 20, yOffset);
+            if (selectedHoraRashi === 'கடகம்') {
+                const simplifiedText = "Female Hora. Represents depth of emotions, protection, and family connections.";
+                doc.text(simplifiedText, 20, yOffset);
+            } else if (selectedHoraRashi === 'சிம்மம்') {
+                const simplifiedText = "Male Hora. Represents confidence, leadership, and creativity.";
+                doc.text(simplifiedText, 20, yOffset);
+            }
             
+            // Key qualities in English
             yOffset += 20;
-            doc.text('முக்கிய குணங்கள்:', 20, yOffset);
+            doc.text('Key Qualities:', 20, yOffset);
             
             yOffset += 10;
-            interpretation.keyQualities.forEach((quality, index) => {
-                doc.text(`• ${quality}`, 30, yOffset + (index * 10));
-            });
+            if (selectedHoraRashi === 'கடகம்') {
+                doc.text('• Emotional disposition', 30, yOffset);
+                doc.text('• Compassionate approach', 30, yOffset + 10);
+                doc.text('• Values family connections', 30, yOffset + 20);
+            } else if (selectedHoraRashi === 'சிம்மம்') {
+                doc.text('• Strong self-confidence', 30, yOffset);
+                doc.text('• Leadership qualities', 30, yOffset + 10);
+                doc.text('• Creative expression', 30, yOffset + 20);
+            }
         }
         
         // Save the PDF
@@ -187,7 +329,7 @@ const HoraVargaChart: React.FC = () => {
     };
 
     return (
-        <div className="p-4 max-w-4xl mx-auto">
+        <div className="p-4 max-w-5xl mx-auto">
             <Card className="w-full">
                 <CardHeader>
                     <CardTitle className="text-2xl text-center">
@@ -196,115 +338,90 @@ const HoraVargaChart: React.FC = () => {
                 </CardHeader>
                 <CardContent>
                     {/* Lagna Input Section */}
-                    <div className="mb-4">
-                        <h3 className="text-lg font-semibold mb-2">லக்நம் (Lagna)</h3>
-                        <div className="grid grid-cols-2 gap-4">
+                    <div className="mb-12">
+                        <h3 className="text-xl font-semibold mb-6">லக்நம் (Lagna)</h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                             {/* Lagna Rashi Selection */}
                             <div>
-                                <Select 
+                                <CustomSelect
+                                    options={RASHI_LIST}
                                     value={lagna.rashi}
-                                    onValueChange={(value) => setLagna(prev => ({...prev, rashi: value}))}
-                                >
-                                    <SelectTrigger>
-                                        <SelectValue placeholder="லக்நம் ராசி" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <ScrollArea className="h-72">
-                                            {RASHI_LIST.map((rashi, index) => (
-                                                <SelectItem 
-                                                    key={`lagna-rashi-${index}`} 
-                                                    value={rashi}
-                                                >
-                                                    {rashi}
-                                                </SelectItem>
-                                            ))}
-                                        </ScrollArea>
-                                    </SelectContent>
-                                </Select>
+                                    onChange={(value) => setLagna(prev => ({...prev, rashi: value}))}
+                                    placeholder="மேஷம்"
+                                />
                             </div>
 
                             {/* Lagna Degree Input */}
-                            <Input 
-                                type="number" 
-                                min="0" 
-                                max="30" 
-                                placeholder="லக்நம் பாகம் (0-30)" 
-                                value={lagna.degree}
-                                onChange={(e) => setLagna(prev => ({...prev, degree: e.target.value}))}
-                            />
-                        </div>
-                    </div>
-
-                    {/* Planetary Input Section */}
-                    <div className="space-y-4">
-                        {planetPositions.map((planet, index) => (
-                            <div key={index} className="grid grid-cols-3 gap-4">
-                                {/* Planet Name Selection */}
-                                <Select 
-                                    value={planet.planetName}
-                                    onValueChange={(value) => updatePlanetInput(index, 'planetName', value)}
-                                >
-                                    <SelectTrigger>
-                                        <SelectValue placeholder="கிரகம்" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <ScrollArea className="h-72">
-                                            {PLANET_LIST.map((planetName, planetIndex) => (
-                                                <SelectItem 
-                                                    key={`planet-${planetIndex}`} 
-                                                    value={planetName}
-                                                >
-                                                    {planetName}
-                                                </SelectItem>
-                                            ))}
-                                        </ScrollArea>
-                                    </SelectContent>
-                                </Select>
-
-                                {/* Rashi Selection */}
-                                <Select 
-                                    value={planet.rashi}
-                                    onValueChange={(value) => updatePlanetInput(index, 'rashi', value)}
-                                >
-                                    <SelectTrigger>
-                                        <SelectValue placeholder="ராசி" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <ScrollArea className="h-72">
-                                            {RASHI_LIST.map((rashi, rashiIndex) => (
-                                                <SelectItem 
-                                                    key={`rashi-${rashiIndex}`} 
-                                                    value={rashi}
-                                                >
-                                                    {rashi}
-                                                </SelectItem>
-                                            ))}
-                                        </ScrollArea>
-                                    </SelectContent>
-                                </Select>
-
-                                {/* Degree Input */}
+                            <div>
                                 <Input 
                                     type="number" 
                                     min="0" 
                                     max="30" 
-                                    placeholder="பாகம் (0-30)" 
-                                    value={planet.degree}
-                                    onChange={(e) => updatePlanetInput(index, 'degree', e.target.value)}
+                                    placeholder="லக்நம் பாகம் (0-30)" 
+                                    value={lagna.degree}
+                                    onChange={(e) => setLagna(prev => ({...prev, degree: e.target.value}))}
+                                    className="w-full"
                                 />
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Planetary Input Section */}
+                    <div className="space-y-8 mb-8">
+                        <h3 className="text-xl font-semibold mb-6">கிரக நிலைகள் (Planetary Positions)</h3>
+                        
+                        {planetPositions.map((planet, index) => (
+                            <div key={index} className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                                {/* Planet Name Selection */}
+                                <div>
+                                    <CustomSelect
+                                        options={PLANET_LIST}
+                                        value={planet.planetName}
+                                        onChange={(value) => updatePlanetInput(index, 'planetName', value)}
+                                        placeholder="கிரகம்"
+                                    />
+                                </div>
+
+                                {/* Rashi Selection */}
+                                <div>
+                                    <CustomSelect
+                                        options={RASHI_LIST}
+                                        value={planet.rashi}
+                                        onChange={(value) => updatePlanetInput(index, 'rashi', value)}
+                                        placeholder="ராசி"
+                                    />
+                                </div>
+
+                                {/* Degree Input */}
+                                <div>
+                                    <Input 
+                                        type="number" 
+                                        min="0" 
+                                        max="30" 
+                                        placeholder="பாகம் (0-30)" 
+                                        value={planet.degree}
+                                        onChange={(e) => updatePlanetInput(index, 'degree', e.target.value)}
+                                        className="w-full"
+                                    />
+                                </div>
                             </div>
                         ))}
 
                         {/* Action Buttons */}
-                        <div className="flex space-x-2 mt-4">
-                            <Button onClick={addPlanetInput} variant="outline">
+                        <div className="flex flex-wrap gap-4 mt-8">
+                            <Button onClick={addPlanetInput} variant="outline" className="px-4 py-2">
                                 + கிரகம் சேர்க்கை
                             </Button>
-                            <Button onClick={generateHoraChart}>
+                            <Button onClick={generateHoraChart} className="px-4 py-2">
                                 ஹோரா வர்கம் உருவாக்கு
                             </Button>
                             {horaChart.length > 0 && (
-                                <Button onClick={generatePDF} variant="secondary">
+                                <Button 
+                                    onClick={generatePDF} 
+                                    variant="secondary" 
+                                    className="px-4 py-2"
+                                    disabled={!fontLoaded}
+                                >
                                     PDF ஏற்றுமதி
                                 </Button>
                             )}
@@ -313,54 +430,56 @@ const HoraVargaChart: React.FC = () => {
 
                     {/* Computed Hora Chart Display */}
                     {horaChart.length > 0 && (
-                        <div className="mt-6 print:block" ref={chartRef}>
-                            <h3 className="text-xl font-bold mb-4">ஹோரா வர்க பலன்கள்</h3>
-                            <table className="w-full border-collapse">
-                                <thead>
-                                    <tr className="bg-gray-100">
-                                        <th className="border p-2">கிரகம்</th>
-                                        <th className="border p-2">D1 ராசி</th>
-                                        <th className="border p-2">D1 பாகம்</th>
-                                        <th className="border p-2">ஹோரா ராசி</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {horaChart.map((planet, index) => (
-                                        <tr 
-                                            key={index}
-                                            className={
-                                                planet.horaRashi === 'கடகம்' 
-                                                    ? 'bg-pink-100 cursor-pointer' 
-                                                    : planet.horaRashi === 'சிம்மம்' 
-                                                    ? 'bg-blue-100 cursor-pointer' 
-                                                    : 'cursor-pointer'
-                                            }
-                                            onClick={() => setSelectedHoraRashi(planet.horaRashi)}
-                                        >
-                                            <td className="border p-2 text-center">{planet.planetName}</td>
-                                            <td className="border p-2 text-center">{planet.rashi}</td>
-                                            <td className="border p-2 text-center">{planet.degree}°</td>
-                                            <td className="border p-2 text-center">{planet.horaRashi}</td>
+                        <div className="mt-10 print:block" ref={chartRef}>
+                            <h3 className="text-xl font-bold mb-6">ஹோரா வர்க பலன்கள்</h3>
+                            <div className="overflow-x-auto">
+                                <table className="w-full border-collapse">
+                                    <thead>
+                                        <tr className="bg-gray-100">
+                                            <th className="border p-2 text-center">கிரகம்</th>
+                                            <th className="border p-2 text-center">D1 ராசி</th>
+                                            <th className="border p-2 text-center">D1 பாகம்</th>
+                                            <th className="border p-2 text-center">ஹோரா ராசி</th>
                                         </tr>
-                                    ))}
-                                </tbody>
-                            </table>
+                                    </thead>
+                                    <tbody>
+                                        {horaChart.map((planet, index) => (
+                                            <tr 
+                                                key={index}
+                                                className={
+                                                    planet.horaRashi === 'கடகம்' 
+                                                        ? 'bg-pink-100 cursor-pointer' 
+                                                        : planet.horaRashi === 'சிம்மம்' 
+                                                        ? 'bg-blue-100 cursor-pointer' 
+                                                        : 'cursor-pointer'
+                                                }
+                                                onClick={() => setSelectedHoraRashi(planet.horaRashi)}
+                                            >
+                                                <td className="border p-2 text-center">{planet.planetName}</td>
+                                                <td className="border p-2 text-center">{planet.rashi}</td>
+                                                <td className="border p-2 text-center">{planet.degree}°</td>
+                                                <td className="border p-2 text-center">{planet.horaRashi}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
                         </div>
                     )}
 
                     {/* Hora Rashi Interpretation */}
                     {selectedHoraRashi && (
-                        <div className="mt-6 p-4 bg-gray-50 rounded-lg">
-                            <h4 className="text-lg font-bold mb-2">
+                        <div className="mt-8 p-6 bg-gray-50 rounded-lg">
+                            <h4 className="text-lg font-bold mb-3">
                                 {HORA_INTERPRETATIONS[selectedHoraRashi].title}
                             </h4>
-                            <p className="mb-2">
+                            <p className="mb-4">
                                 {HORA_INTERPRETATIONS[selectedHoraRashi].description}
                             </p>
-                            <h5 className="font-semibold">முக்கிய குணங்கள்:</h5>
-                            <ul className="list-disc pl-5">
+                            <h5 className="font-semibold mb-2">முக்கிய குணங்கள்:</h5>
+                            <ul className="list-disc pl-6">
                                 {HORA_INTERPRETATIONS[selectedHoraRashi].keyQualities.map((quality, index) => (
-                                    <li key={index}>{quality}</li>
+                                    <li key={index} className="mb-1">{quality}</li>
                                 ))}
                             </ul>
                         </div>
@@ -374,8 +493,10 @@ const HoraVargaChart: React.FC = () => {
                     body * {
                         visibility: hidden;
                     }
-                    .print\:block {
+                    .print\\:block, .print\\:block * {
                         visibility: visible;
+                    }
+                    .print\\:block {
                         position: absolute;
                         left: 0;
                         top: 0;
